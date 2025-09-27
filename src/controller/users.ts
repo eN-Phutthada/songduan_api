@@ -1,23 +1,21 @@
 import { Router } from "express";
+import { ResultSetHeader, RowDataPacket } from "mysql2";
+
 import { asyncHandler } from "../middleware/asyncHandler";
 import { hashPassword, verifyPassword } from "../utils/password";
-import type { RowDataPacket, ResultSetHeader } from "mysql2/promise";
+import { uploadMedia, buildUploadTarget, saveBufferToFile, safeUnlink, } from "../utils/upload";
 import { conn } from "../lib/db";
-import { uploadMedia } from "../lib/upload";
-import fs from "fs";
 
 const router = Router();
 export default router;
 
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,30}$/;
 
-// ===== สมัครสมาชิกแบบ member =====
 router.post(
     "/members",
     uploadMedia.single("avatarFile"),
     asyncHandler(async (req, res) => {
-        // body fields จากฟอร์ม
-        const body = req.body as any; // multipart form fields
+        const body = req.body as any;
         const {
             username,
             password,
@@ -30,11 +28,10 @@ router.post(
             lng,
         } = body;
 
-        // validate ขั้นต้น
         if (role !== "MEMBER") {
-            return res.status(400).json({
-                error: { code: "BAD_ROLE", message: "role ต้องเป็น MEMBER สำหรับ endpoint นี้" },
-            });
+            return res
+                .status(400)
+                .json({ error: { code: "BAD_ROLE", message: "role ต้องเป็น MEMBER สำหรับ endpoint นี้" } });
         }
         if (!username || !password || !name || !phone || !address || !placeName) {
             return res.status(400).json({
@@ -46,6 +43,7 @@ router.post(
                 error: { code: "BAD_USERNAME", message: "username ต้องเป็น a-z, 0-9, _ ความยาว 3–30 ตัวอักษร" },
             });
         }
+
         const latNum = Number(lat);
         const lngNum = Number(lng);
         if (!Number.isFinite(latNum) || !Number.isFinite(lngNum)) {
@@ -53,24 +51,27 @@ router.post(
                 error: { code: "BAD_COORDS", message: "lat/lng ต้องเป็นตัวเลข" },
             });
         }
+
         if (!req.file) {
-            return res.status(400).json({
-                error: { code: "MISSING_AVATAR", message: "ต้องอัปโหลดรูปโปรไฟล์" },
-            });
+            return res
+                .status(400)
+                .json({ error: { code: "MISSING_AVATAR", message: "ต้องอัปโหลดรูปโปรไฟล์" } });
         }
 
+        const { diskPath: avatarDiskPath, publicPath: avatarPublicPath } =
+            buildUploadTarget("avatar", req.file.originalname);
 
-        const avatar_path = req.file ? `/uploads/avatars/${req.file.filename}` : null;
         const password_hash = await hashPassword(password);
-
         const connTx = await conn.getConnection();
+        let avatarWritten = false;
+
         try {
             await connTx.beginTransaction();
 
             const [r] = await connTx.execute<ResultSetHeader>(
                 `INSERT INTO users(role, phone, username, password_hash, name, avatar_path)
          VALUES(?,?,?,?,?,?)`,
-                ["MEMBER", phone, username, password_hash, name, avatar_path]
+                ["MEMBER", phone, username, password_hash, name, avatarPublicPath]
             );
             const userId = r.insertId;
 
@@ -80,7 +81,10 @@ router.post(
                 [userId, placeName, address, latNum, lngNum]
             );
 
-            // ส่งข้อมูลกลับ
+            // เขียนไฟล์จริงหลัง INSERT ผ่าน (ก่อน commit)
+            await saveBufferToFile(avatarDiskPath, req.file.buffer);
+            avatarWritten = true;
+
             const [rows] = await connTx.query<RowDataPacket[]>(
                 `SELECT id, role, phone, username, name, avatar_path, created_at, updated_at
          FROM users WHERE id=?`,
@@ -88,6 +92,7 @@ router.post(
             );
 
             await connTx.commit();
+
             return res.status(201).json({
                 ...rows[0],
                 default_address: {
@@ -101,15 +106,15 @@ router.post(
         } catch (err: any) {
             await connTx.rollback();
 
-            if (req.file) fs.unlink(req.file.path, () => { });
+            if (avatarWritten) await safeUnlink(avatarDiskPath);
 
             if (err?.code === "ER_DUP_ENTRY") {
-                const msg =
-                    (err.sqlMessage || "").includes("uniq_users_username") ||
-                        (err.sqlMessage || "").includes("username")
+                const msg = (err.sqlMessage || "");
+                const human =
+                    msg.includes("uniq_users_username") || msg.includes("username")
                         ? { code: "USERNAME_TAKEN", message: "username นี้ถูกใช้แล้ว" }
                         : { code: "PHONE_TAKEN", message: "เบอร์นี้ถูกใช้แล้ว" };
-                return res.status(409).json({ error: msg });
+                return res.status(409).json({ error: human });
             }
             throw err;
         } finally {
@@ -118,8 +123,6 @@ router.post(
     })
 );
 
-
-// ===== สมัครสมาชิกแบบ Rider =====
 router.post(
     "/riders",
     uploadMedia.fields([
@@ -134,11 +137,10 @@ router.post(
             name,
             phone,
             vehicle_plate,
-            vehicle_model,       // optional
-            vehicle_photo_path,  // optional: ถ้าส่งเป็น URL/พาธมา
+            vehicle_model,
+            vehicle_photo_path,
         } = req.body as Record<string, string>;
 
-        // 1) Validate อินพุต
         if (role !== "RIDER") {
             return res
                 .status(400)
@@ -146,50 +148,40 @@ router.post(
         }
         if (!username || !password || !name || !phone || !vehicle_plate) {
             return res.status(400).json({
-                error: {
-                    code: "MISSING",
-                    message:
-                        "ต้องมี username, password, name, phone, vehicle_plate อย่างน้อย",
-                },
+                error: { code: "MISSING", message: "ต้องมี username, password, name, phone, vehicle_plate อย่างน้อย" },
             });
         }
         if (!USERNAME_RE.test(username)) {
             return res.status(400).json({
-                error: {
-                    code: "BAD_USERNAME",
-                    message: "username ต้องเป็น a-z, 0-9, _ ความยาว 3–30 ตัวอักษร",
-                },
+                error: { code: "BAD_USERNAME", message: "username ต้องเป็น a-z, 0-9, _ ความยาว 3–30 ตัวอักษร" },
             });
         }
 
-        // รูปจากไฟล์ (ถ้ามี)
-        const avatar_path =
-            (req.files as any)?.avatarFile?.[0]
-                ? `/uploads/avatars/${(req.files as any).avatarFile[0].filename}`
-                : null;
+        const avatarFile = (req.files as any)?.avatarFile?.[0] || null;
+        const vehicleFile = (req.files as any)?.vehiclePhotoFile?.[0] || null;
 
-        // vehicle photo: ถ้าส่งไฟล์มาก็ใช้ไฟล์, ไม่งั้นถ้ามี vehicle_photo_path เป็นสตริงก็เก็บตามนั้น
-        const vehicle_photo_path_final =
-            (req.files as any)?.vehiclePhotoFile?.[0]
-                ? `/uploads/vehicles/${(req.files as any).vehiclePhotoFile[0].filename}`
-                : vehicle_photo_path || null;
+        const avatarTarget = avatarFile ? buildUploadTarget("avatar", avatarFile.originalname) : null;
+        const vehicleTarget = vehicleFile ? buildUploadTarget("vehicle", vehicleFile.originalname) : null;
+
+        const avatarPublicPath = avatarTarget?.publicPath || null;
+        const vehiclePublicPath = vehicleTarget?.publicPath || vehicle_photo_path || null;
 
         const password_hash = await hashPassword(password);
 
-        // 2) Transaction
         const tx = await conn.getConnection();
+        let wroteAvatar = false;
+        let wroteVehicle = false;
+
         try {
             await tx.beginTransaction();
 
-            // Users
             const [u] = await tx.execute<ResultSetHeader>(
                 `INSERT INTO users (role, phone, username, password_hash, name, avatar_path)
          VALUES (?,?,?,?,?,?)`,
-                ["RIDER", phone.trim(), username.trim(), password_hash, name.trim(), avatar_path]
+                ["RIDER", phone.trim(), username.trim(), password_hash, name.trim(), avatarPublicPath]
             );
             const userId = u.insertId;
 
-            // Rider Profiles
             await tx.execute<ResultSetHeader>(
                 `INSERT INTO rider_profiles (user_id, vehicle_plate, vehicle_model, vehicle_photo_path, is_active)
          VALUES (?,?,?,?,1)`,
@@ -197,11 +189,19 @@ router.post(
                     userId,
                     vehicle_plate.trim(),
                     (vehicle_model || null)?.toString().trim() || null,
-                    vehicle_photo_path_final,
+                    vehiclePublicPath,
                 ]
             );
 
-            // อ่านข้อมูลตอบกลับ
+            if (avatarFile && avatarTarget) {
+                await saveBufferToFile(avatarTarget.diskPath, avatarFile.buffer);
+                wroteAvatar = true;
+            }
+            if (vehicleFile && vehicleTarget) {
+                await saveBufferToFile(vehicleTarget.diskPath, vehicleFile.buffer);
+                wroteVehicle = true;
+            }
+
             const [[user]]: any = await tx.query<RowDataPacket[]>(
                 `SELECT id, role, phone, username, name, avatar_path, created_at, updated_at
          FROM users WHERE id = ?`,
@@ -214,14 +214,13 @@ router.post(
             );
 
             await tx.commit();
-            return res.status(201).json({
-                ...user,
-                rider_profile: profile,
-            });
+            return res.status(201).json({ ...user, rider_profile: profile });
         } catch (err: any) {
             await tx.rollback();
 
-            // แยกเคสชน unique แบบแม่น ๆ
+            if (wroteAvatar && avatarTarget) await safeUnlink(avatarTarget.diskPath);
+            if (wroteVehicle && vehicleTarget) await safeUnlink(vehicleTarget.diskPath);
+
             if (err?.code === "ER_DUP_ENTRY") {
                 const msg = (err.sqlMessage || "");
                 if (msg.includes("uniq_users_username") || msg.includes("username")) {
@@ -247,12 +246,11 @@ router.post(
     })
 );
 
-// ===== เข้าสู่ระบบด้วย username หรือ phone =====
 router.post(
     "/login",
     asyncHandler(async (req, res) => {
         const { identifier, password } = req.body as {
-            identifier: string; // username หรือ phone
+            identifier: string;
             password: string;
         };
 
@@ -265,7 +263,6 @@ router.post(
             });
         }
 
-        // ถ้า identifier ตรงรูปแบบ username ให้ค้นด้วย username เป็นอันดับแรก
         const isUsernameLike = USERNAME_RE.test(identifier);
 
         let rows: RowDataPacket[];
@@ -275,14 +272,12 @@ router.post(
                 [identifier]
             );
             if (rows.length === 0) {
-                // เผื่อผู้ใช้พิมพ์เบอร์ที่ดัน match regex ไม่ได้ ให้ลอง phone ซ้ำ
                 [rows] = await conn.query<RowDataPacket[]>(
                     `SELECT * FROM users WHERE phone = ? LIMIT 1`,
                     [identifier]
                 );
             }
         } else {
-            // ดูเป็นเบอร์มากกว่า → ค้น phone ก่อน แล้วค่อย fallback ไป username
             [rows] = await conn.query<RowDataPacket[]>(
                 `SELECT * FROM users WHERE phone = ? LIMIT 1`,
                 [identifier]
@@ -329,7 +324,6 @@ router.post(
     })
 );
 
-// ===== อ่านผู้ใช้ =====
 router.get(
     "/:id",
     asyncHandler(async (req, res) => {
@@ -346,4 +340,3 @@ router.get(
         res.json((rows as any)[0]);
     })
 );
-

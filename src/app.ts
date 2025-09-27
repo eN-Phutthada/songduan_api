@@ -7,11 +7,9 @@ import { conn } from "./lib/db";
 
 export const app = express();
 
-// Middleware
 app.use(express.json());
 app.use(express.text());
 
-// Routes
 app.get("/health", (_req, res) => {
     res.json({ ok: true, service: "api", ts: new Date().toISOString() });
 });
