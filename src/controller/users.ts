@@ -296,7 +296,7 @@ router.post(
             return res.status(401).json({
                 error: {
                     code: "INVALID_CREDENTIALS",
-                    message: "ชื่อผู้ใช้/เบอร์ หรือรหัสผ่านไม่ถูกต้อง",
+                    message: "ชื่อผู้ใช้หรือเบอร์ ไม่ถูกต้อง",
                 },
             });
         }
@@ -306,7 +306,7 @@ router.post(
             return res.status(401).json({
                 error: {
                     code: "INVALID_CREDENTIALS",
-                    message: "ชื่อผู้ใช้/เบอร์ หรือรหัสผ่านไม่ถูกต้อง",
+                    message: "รหัสผ่านไม่ถูกต้อง",
                 },
             });
         }
