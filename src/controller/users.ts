@@ -59,7 +59,8 @@ router.post(
         }
 
         const { diskPath: avatarDiskPath, publicPath: avatarPublicPath } =
-            buildUploadTarget("avatar", req.file.originalname);
+            buildUploadTarget("avatar", username, req.file.originalname);
+
 
         const password_hash = await hashPassword(password);
         const connTx = await conn.getConnection();
@@ -160,8 +161,8 @@ router.post(
         const avatarFile = (req.files as any)?.avatarFile?.[0] || null;
         const vehicleFile = (req.files as any)?.vehiclePhotoFile?.[0] || null;
 
-        const avatarTarget = avatarFile ? buildUploadTarget("avatar", avatarFile.originalname) : null;
-        const vehicleTarget = vehicleFile ? buildUploadTarget("vehicle", vehicleFile.originalname) : null;
+        const avatarTarget = avatarFile ? buildUploadTarget("avatar", username, avatarFile.originalname) : null;
+        const vehicleTarget = vehicleFile ? buildUploadTarget("vehicle", username, vehicleFile.originalname) : null;
 
         const avatarPublicPath = avatarTarget?.publicPath || null;
         const vehiclePublicPath = vehicleTarget?.publicPath || vehicle_photo_path || null;

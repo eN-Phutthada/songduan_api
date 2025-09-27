@@ -19,16 +19,17 @@ export async function safeUnlink(fullPath: string) {
     } catch { }
 }
 
-export function buildUploadTarget(kind: UploadKind, originalname?: string) {
+export function buildUploadTarget(kind: "avatar" | "vehicle", userRef: string, originalname?: string) {
     const ts = Date.now();
     const ext = (originalname && path.extname(originalname)) || ".jpg";
     const base = kind === "vehicle" ? "vehicle" : "avatar";
-    const filename = `${base}_${ts}${ext}`;
+    const filename = `${base}_${userRef}_${ts}${ext}`;
     const dir = kind === "vehicle" ? path.join("uploads", "vehicles") : path.join("uploads", "avatars");
     const diskPath = path.join(dir, filename);
     const publicPath = `/${dir.replace(/\\/g, "/")}/${filename}`;
     return { filename, dir, diskPath, publicPath };
 }
+
 
 const allowed = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
