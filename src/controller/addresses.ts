@@ -1,11 +1,9 @@
 import { Router, Request, Response } from "express";
-import { conn } from "../lib/db"; // expect mysql2/promise pool
+import { conn } from "../lib/db";
 import { asyncHandler } from "../middleware/asyncHandler";
 
 const router = Router();
 export default router;
-
-// ---------- tiny validators ----------
 
 function toNumber(v: any): number | null {
     if (v === null || v === undefined || v === "") return null;
@@ -37,7 +35,6 @@ function badRequest(message: string, extra?: any) {
     return err;
 }
 
-// ---------- helpers ----------
 async function ensureUserExists(userId: number) {
     const [rows] = await conn.query("SELECT id FROM users WHERE id = ?", [userId]);
     const arr = rows as Array<{ id: number }>;
@@ -45,7 +42,6 @@ async function ensureUserExists(userId: number) {
 }
 
 async function setDefaultWithinTx(tx: any, userId: number, addressId: number) {
-    // unset other defaults for this user, then set this one
     await tx.query("UPDATE addresses SET is_default = 0 WHERE user_id = ?", [userId]);
     await tx.query("UPDATE addresses SET is_default = 1 WHERE id = ? AND user_id = ?", [addressId, userId]);
 }
@@ -57,11 +53,9 @@ function parsePagination(req: Request) {
     return { page, pageSize, offset };
 }
 
-// ---------- routes ----------
-
 // List addresses by user
 router.get(
-    "/users/:userId/addresses",
+    "/:userId",
     asyncHandler(async (req: Request, res: Response) => {
         const userId = Number(req.params.userId);
         if (!Number.isInteger(userId) || userId <= 0) throw badRequest("invalid userId");
@@ -100,7 +94,7 @@ router.get(
 
 // Create address for a user
 router.post(
-    "/users/:userId/addresses",
+    "/:userId",
     asyncHandler(async (req: Request, res: Response) => {
         const userId = Number(req.params.userId);
         if (!Number.isInteger(userId) || userId <= 0) throw badRequest("invalid userId");
@@ -152,7 +146,7 @@ router.post(
 
 // Update an address
 router.patch(
-    "/addresses/:id",
+    "/:id",
     asyncHandler(async (req: Request, res: Response) => {
         const id = Number(req.params.id);
         if (!Number.isInteger(id) || id <= 0) throw badRequest("invalid id");
@@ -270,7 +264,7 @@ router.patch(
 
 // Delete
 router.delete(
-    "/addresses/:id",
+    "/:id",
     asyncHandler(async (req: Request, res: Response) => {
         const id = Number(req.params.id);
         if (!Number.isInteger(id) || id <= 0) throw badRequest("invalid id");

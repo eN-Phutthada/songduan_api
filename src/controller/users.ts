@@ -82,7 +82,6 @@ router.post(
                 [userId, placeName, address, latNum, lngNum]
             );
 
-            // เขียนไฟล์จริงหลัง INSERT ผ่าน (ก่อน commit)
             await saveBufferToFile(avatarDiskPath, req.file.buffer);
             avatarWritten = true;
 
