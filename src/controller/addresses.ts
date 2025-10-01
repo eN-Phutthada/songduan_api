@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { conn } from "../lib/db";
 import { asyncHandler } from "../middleware/asyncHandler";
+import { RowDataPacket } from "mysql2";
 
 const router = Router();
 export default router;
@@ -52,6 +53,107 @@ function parsePagination(req: Request) {
     const offset = (page - 1) * pageSize;
     return { page, pageSize, offset };
 }
+
+// phone helpers — ให้รองรับ 0xxxxxxxxx, 66xxxxxxxxx, +66xxxxxxxxx
+function buildPhoneVariants(input: string): Set<string> {
+    const s = (input || "").trim();
+    const set = new Set<string>();
+    if (!s) return set;
+
+    // raw
+    set.add(s);
+
+    // ตัวเลขล้วน
+    const digits = s.replace(/[^\d]/g, "");
+    if (digits) set.add(digits);
+
+    // 0xxxxxxxxx -> +66xxxxxxxxx และ 66xxxxxxxxx
+    if (/^0\d{8,10}$/.test(digits)) {
+        const noZero = digits.substring(1);
+        set.add("+66" + noZero);
+        set.add("66" + noZero);
+    }
+
+    // +66xxxxxxxxx / 66xxxxxxxxx -> 0xxxxxxxxx (best effort)
+    if (/^\+?66\d{8,10}$/.test(digits)) {
+        const tail = digits.replace(/^\+?66/, "");
+        if (tail.length >= 8) set.add("0" + tail.substring(tail.length - 9));
+    }
+
+    return set;
+}
+
+router.get(
+    "/search",
+    asyncHandler(async (req: Request, res: Response) => {
+        const rawPhone = String(req.query.phone ?? "").trim();
+        if (!rawPhone) {
+            return res.status(400).json({ error: { code: "PHONE_REQUIRED", message: "ต้องใส่หมายเลขโทรศัพท์" } });
+        }
+
+        const authUser = (req as any).user as { id: number; role: string; phone?: string } | undefined;
+        const requesterIdParam = req.query.requesterId != null ? Number(req.query.requesterId) : undefined;
+
+        const variants = buildPhoneVariants(rawPhone);
+        const phones = Array.from(variants);
+        if (!phones.length) {
+            return res.status(400).json({ error: { code: "PHONE_INVALID", message: "รูปแบบหมายเลขไม่ถูกต้อง" } });
+        }
+
+        const placeholders = phones.map(() => "?").join(",");
+        const [users] = await conn.query<RowDataPacket[]>(
+            `SELECT id, role, phone, name, avatar_path
+                FROM users
+            WHERE phone IN (${placeholders})
+            LIMIT 1`,
+            phones
+        );
+
+
+        if (users.length === 0) {
+            return res.status(404).json({ error: { code: "PHONE_NOT_FOUND", message: "ไม่พบผู้ใช้ที่มีหมายเลขนี้" } });
+        }
+
+        const target = users[0];
+
+        if (authUser?.id && Number(target.id) === Number(authUser.id)) {
+            return res.status(403).json({ error: { code: "SELF_PHONE_NOT_ALLOWED", message: "ไม่สามารถค้นหาที่อยู่ของตัวเองได้" } });
+        }
+        if (!authUser?.id && requesterIdParam && Number(target.id) === Number(requesterIdParam)) {
+            return res.status(403).json({ error: { code: "SELF_PHONE_NOT_ALLOWED", message: "ไม่สามารถค้นหาที่อยู่ของตัวเองได้" } });
+        }
+
+        if (String(target.role).toUpperCase() === "RIDER") {
+            return res.status(403).json({ error: { code: "RIDER_PHONE_NOT_ALLOWED", message: "ไม่สามารถค้นหาที่อยู่ของ Rider ได้" } });
+        }
+
+        const page = Math.max(1, Number(req.query.page ?? 1));
+        const pageSize = Math.max(1, Math.min(100, Number(req.query.pageSize ?? 20)));
+        const offset = (page - 1) * pageSize;
+
+        const [addresses] = await conn.query<RowDataPacket[]>(
+            `SELECT SQL_CALC_FOUND_ROWS
+              id, user_id, label, address_text, lat, lng, is_default, created_at
+         FROM addresses
+        WHERE user_id = ?
+        ORDER BY is_default DESC, id DESC
+        LIMIT ? OFFSET ?`,
+            [target.id, pageSize, offset]
+        );
+        const [totals] = await conn.query<RowDataPacket[]>(`SELECT FOUND_ROWS() AS total`);
+        const total = Number((totals[0] as any)?.total ?? 0);
+
+        return res.json({
+            data: {
+                user: { id: target.id, name: target.name, phone: target.phone, role: target.role, avatar_path: target.avatar_path, },
+                addresses,
+            },
+            meta: { page, pageSize, total, totalPages: Math.ceil(total / pageSize) },
+            notice: "ระบบป้องกันการค้นหาเบอร์ของตนเองและของ Rider เปิดใช้งาน",
+            mode: authUser?.id ? "auth" : (requesterIdParam ? "requesterId" : "anonymous"),
+        });
+    })
+);
 
 // List addresses by user
 router.get(

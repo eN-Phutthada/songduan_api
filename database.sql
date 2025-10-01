@@ -44,7 +44,7 @@ CREATE UNIQUE INDEX uniq_default_address_per_user ON addresses(default_owner);
 -- SHIPMENTS
 CREATE TABLE shipments (
   id                   BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
-  title                VARCHAR(200) NOT NULL,   -- << ชื่อของการส่ง เช่น "อาหารกลางวัน"
+  title                VARCHAR(200) NOT NULL,  
   sender_id            BIGINT UNSIGNED NOT NULL,
   receiver_id          BIGINT UNSIGNED NOT NULL,
   pickup_address_id    BIGINT UNSIGNED NOT NULL,
@@ -53,6 +53,7 @@ CREATE TABLE shipments (
          NOT NULL DEFAULT 'WAITING_FOR_RIDER',
   status_updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  note                 TEXT,
   CONSTRAINT fk_ship_sender   FOREIGN KEY (sender_id)   REFERENCES users(id)     ON DELETE RESTRICT,
   CONSTRAINT fk_ship_receiver FOREIGN KEY (receiver_id) REFERENCES users(id)     ON DELETE RESTRICT,
   CONSTRAINT fk_ship_pickup   FOREIGN KEY (pickup_address_id)  REFERENCES addresses(id) ON DELETE RESTRICT,
