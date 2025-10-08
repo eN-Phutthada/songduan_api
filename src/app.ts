@@ -11,6 +11,9 @@ export const app = express();
 app.use(express.json());
 app.use(express.text());
 
+app.get('/healthz', (_, res) => res.status(200).send('ok'));
+app.get('/', (_, res) => res.status(204).end());
+
 app.get("/health", (_req, res) => {
     res.json({ ok: true, service: "api", ts: new Date().toISOString() });
 });
