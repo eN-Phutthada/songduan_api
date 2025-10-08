@@ -12,6 +12,7 @@ app.use(express.json());
 app.use(express.text());
 
 app.get('/healthz', (_, res) => res.status(200).send('ok'));
+
 app.get('/', (_, res) => {
     const html = `
     <style>
@@ -35,7 +36,7 @@ app.get("/health", (_req, res) => {
     res.json({ ok: true, service: "api", ts: new Date().toISOString() });
 });
 
-app.get('/test-db', async (req, res) => {
+app.get('/test-db', async (_req, res) => {
     try {
         const [rows] = await conn.query('SELECT NOW() as now');
         res.json({
