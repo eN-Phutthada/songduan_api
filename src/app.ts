@@ -12,7 +12,24 @@ app.use(express.json());
 app.use(express.text());
 
 app.get('/healthz', (_, res) => res.status(200).send('ok'));
-app.get('/', (_, res) => res.status(204).end());
+app.get('/', (_, res) => {
+    const html = `
+    <style>
+      body {
+        background: #0f0f0f;
+        color: #00ffcc;
+        font-family: monospace;
+        text-align: center;
+        padding-top: 20vh;
+      }
+      h1 { font-size: 3rem; margin-bottom: 0.5rem; }
+      p { color: #999; }
+    </style>
+    <h1>⚡ API online ⚡</h1>
+    <p>Render instance is alive — version ${process.env.npm_package_version}</p>
+  `;
+    res.send(html);
+});
 
 app.get("/health", (_req, res) => {
     res.json({ ok: true, service: "api", ts: new Date().toISOString() });
