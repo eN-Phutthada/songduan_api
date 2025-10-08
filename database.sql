@@ -102,7 +102,7 @@ CREATE TABLE rider_assignments (
 ) ENGINE=InnoDB;
 CREATE UNIQUE INDEX uniq_active_job_per_rider ON rider_assignments(active_owner);
 
--- PHOTOS -> เก็บเป็น "ไฟล์" (path/URL + meta) ไม่ยัด BLOB
+-- PHOTOS -> เก็บเป็น "ไฟล์" (path/URL + meta) 
 CREATE TABLE shipment_files (
   id            BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
   shipment_id   BIGINT UNSIGNED NOT NULL,

@@ -3,6 +3,7 @@ import usersRouter from "./controller/users";
 import ridersRouter from "./controller/riders";
 import addressesRouter from "./controller/addresses";
 import shipmentRouter from "./controller/shipment";
+import rider_locations from "./controller/rider_locations";
 import uploadRouter from "./controller/upload";
 import { conn } from "./lib/db";
 
@@ -56,6 +57,7 @@ app.use("/users", usersRouter);
 app.use("/riders", ridersRouter);
 app.use("/addresses", addressesRouter);
 app.use("/shipments", shipmentRouter);
+app.use("/rider_locations", rider_locations);
 
 app.use("/upload", uploadRouter);
 app.use("/uploads", express.static("uploads"));

@@ -55,3 +55,28 @@ router.get(
 
     })
 );
+
+// GET /api/riders/:id/active-assignment
+router.get(
+    "/:id/active-assignment",
+    asyncHandler(async (req, res) => {
+        const riderId = Number(req.params.id);
+        if (!Number.isFinite(riderId)) {
+            return res.status(400).json({ error: { message: "rider_id ไม่ถูกต้อง" } });
+        }
+
+        const [rows] = await conn.query<RowDataPacket[]>(
+            `SELECT shipment_id
+         FROM rider_assignments
+        WHERE rider_id = ? AND delivered_at IS NULL
+        LIMIT 1`,
+            [riderId]
+        );
+
+        if (rows.length === 0) {
+            return res.status(404).json({ error: { message: "no active job" } });
+        }
+
+        return res.json({ data: { shipment_id: rows[0].shipment_id } });
+    })
+);
