@@ -53,6 +53,15 @@ app.get('/test-db', async (_req, res) => {
     }
 });
 
+// error handler กลาง app.ts
+app.use((err: any, _req: any, res: any, _next: any) => {
+    if (err?.message === "INVALID_FILE_TYPE") {
+        return res.status(400).json({ error: { message: "ไฟล์รูปไม่รองรับ (รองรับ .jpg/.jpeg/.png/.webp/.gif/.heic/.heif)" } });
+    }
+    return res.status(500).json({ error: { message: err?.message || "internal error" } });
+});
+
+
 app.use("/users", usersRouter);
 app.use("/riders", ridersRouter);
 app.use("/addresses", addressesRouter);

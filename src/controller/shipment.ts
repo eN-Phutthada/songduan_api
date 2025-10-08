@@ -2,7 +2,9 @@ import { Router, Request, Response } from "express";
 import { conn } from "../lib/db";
 import { asyncHandler } from "../middleware/asyncHandler";
 import { ResultSetHeader, RowDataPacket } from "mysql2";
-import { uploadMedia, buildUploadTarget, saveBufferToFile } from "../utils/upload";
+import { uploadMedia, buildUploadTarget, saveBufferToFile, safeUnlink, ensureDir } from "../utils/upload";
+import path from "path";
+import fs from "fs";
 
 const router = Router();
 export default router;
@@ -681,3 +683,106 @@ router.post(
         }
     })
 );
+
+
+/**
+ * POST /api/shipments/:id/pickup-photo
+ * POST /api/shipments/:id/deliver-photo
+ * field: photo (image)
+ */
+
+router.post("/:id/pickup-photo",
+    uploadMedia.single("photo"),
+    asyncHandler(async (req: Request, res: Response) => {
+        await handleUploadStage(req, res, "PICKED_UP_EN_ROUTE");
+    })
+);
+
+router.post("/:id/deliver-photo",
+    uploadMedia.single("photo"),
+    asyncHandler(async (req: Request, res: Response) => {
+        await handleUploadStage(req, res, "DELIVERED");
+    })
+);
+
+async function handleUploadStage(req: Request, res: Response, stage: "PICKED_UP_EN_ROUTE" | "DELIVERED") {
+    const shipmentId = Number(req.params.id);
+    if (!shipmentId || !req.file) {
+        return res.status(400).json({ error: { message: "ข้อมูลไม่ครบ (shipmentId หรือ photo)" } });
+    }
+
+    // ใครถืออยู่
+    const [asgRows] = await conn.query(
+        `SELECT rider_id FROM rider_assignments WHERE shipment_id=? AND delivered_at IS NULL LIMIT 1`,
+        [shipmentId]
+    ) as [any[], any];
+    if (asgRows.length === 0) {
+        return res.status(404).json({ error: { message: "ไม่พบงานหรือไรเดอร์ถือไม่อยู่" } });
+    }
+    const riderId = asgRows[0].rider_id;
+
+    // ตำแหน่งไรเดอร์ล่าสุด
+    const [locRows] = await conn.query(
+        `SELECT lat, lng FROM rider_locations WHERE rider_id=? LIMIT 1`,
+        [riderId]
+    ) as [any[], any];
+    if (locRows.length === 0) {
+        return res.status(409).json({ error: { message: "ยังไม่มีตำแหน่งล่าสุดของไรเดอร์" } });
+    }
+    const { lat: rLat, lng: rLng } = locRows[0];
+
+    // พิกัด pickup/dropoff
+    const [spotRows] = await conn.query(
+        `SELECT ap.lat pLat, ap.lng pLng, ad.lat dLat, ad.lng dLng
+     FROM shipments s
+     JOIN addresses ap ON ap.id = s.pickup_address_id
+     JOIN addresses ad ON ad.id = s.dropoff_address_id
+     WHERE s.id=? LIMIT 1`,
+        [shipmentId]
+    ) as [any[], any];
+    if (spotRows.length === 0) {
+        return res.status(404).json({ error: { message: "ไม่พบข้อมูลงานนี้" } });
+    }
+    const { pLat, pLng, dLat, dLng } = spotRows[0];
+
+    // ตรวจรัศมี
+    const dist = stage === "PICKED_UP_EN_ROUTE"
+        ? distanceMeters(rLat, rLng, pLat, pLng)
+        : distanceMeters(rLat, rLng, dLat, dLng);
+
+    if (dist > GATE_METERS) {
+        return res.status(422).json({
+            error: { message: `ต้องอยู่ในระยะไม่เกิน ${GATE_METERS} m จากจุด${stage === "PICKED_UP_EN_ROUTE" ? "รับ" : "ส่ง"} (~${dist.toFixed(1)} m)` }
+        });
+    }
+
+    // ลบของเดิม (stage เดิม)
+    const [oldRows] = await conn.query(
+        `SELECT file_path FROM shipment_files WHERE shipment_id=? AND stage=? LIMIT 1`,
+        [shipmentId, stage]
+    ) as [any[], any];
+    if (oldRows.length > 0) {
+        const old = oldRows[0].file_path as string;
+        const full = path.join(process.cwd(), old.replace(/^\//, ""));
+        await safeUnlink(full);
+        await conn.query(`DELETE FROM shipment_files WHERE shipment_id=? AND stage=?`, [shipmentId, stage]);
+    }
+
+    // เซฟไฟล์ใหม่
+    const ts = Date.now();
+    const filename = `shipment_${shipmentId}_${stage}_${ts}${path.extname(req.file.originalname)}`;
+    const dir = path.join("uploads", "shipments", `${shipmentId}`);
+    const diskPath = path.join(dir, filename);
+    const publicPath = `/${dir.replace(/\\/g, "/")}/${filename}`;
+
+    ensureDir(path.dirname(diskPath));
+    await saveBufferToFile(diskPath, req.file.buffer);
+
+    await conn.query(
+        `INSERT INTO shipment_files (shipment_id, uploaded_by, stage, file_path)
+     VALUES (?, ?, ?, ?)`,
+        [shipmentId, riderId, stage, publicPath]
+    );
+
+    return res.status(201).json({ data: { shipment_id: shipmentId, stage, file_path: publicPath } });
+}

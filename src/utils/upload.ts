@@ -32,7 +32,6 @@ export function buildUploadTarget(kind: UploadKind, ref: string, originalname?: 
         dir = path.join("uploads", "vehicles");
     } else if (kind === "shipment") {
         base = "shipment";
-        // โฟลเดอร์แยกตาม ref (เช่น ship_1234567890 หรือ shipmentId ภายหลัง)
         dir = path.join("uploads", "shipments", ref);
     }
 
@@ -42,10 +41,26 @@ export function buildUploadTarget(kind: UploadKind, ref: string, originalname?: 
     return { filename, dir, diskPath, publicPath };
 }
 
-const allowed = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+
+// --- NEW: ยืดหยุ่น mimetype / extension ---
+const allowedExt = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"]);
+
 function fileFilter(_req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) {
-    if (allowed.has(file.mimetype)) return cb(null, true);
-    cb(new Error("INVALID_FILE_TYPE"));
+    const mt = (file.mimetype || "").toLowerCase();
+
+    // 1) อนุญาตรูปทั้งหมดแบบกว้าง
+    if (mt.startsWith("image/")) return cb(null, true);
+
+    // 2) mimetype เพี้ยน → ใช้นามสกุลไฟล์ช่วยตัดสิน
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    if (allowedExt.has(ext)) return cb(null, true);
+
+    // 3) กรณีพิเศษ: บางเคสได้ application/octet-stream แต่ไฟล์เป็นรูปจริงจากนามสกุล
+    if (mt === "application/octet-stream" && allowedExt.has(ext)) {
+        return cb(null, true);
+    }
+
+    return cb(new Error("INVALID_FILE_TYPE"));
 }
 
 export const uploadMedia = multer({

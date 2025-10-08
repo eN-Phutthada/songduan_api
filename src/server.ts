@@ -4,7 +4,7 @@ import { app } from "./app";
 const server = http.createServer(app);
 
 server.listen(() => {
-    console.log(`🚀 Server running at https://songduan-api.com`);
+    console.log(`🚀 Server running `);
 }).on("error", (error) => {
     console.error("❌ Server error:", error);
 });
