@@ -1,10 +1,12 @@
-import http, { Server } from "http";
+import http from "http";
 import { app } from "./app";
 
-const server: Server = http.createServer(app);
+const server = http.createServer(app);
 
 server.listen(() => {
     console.log(`🚀 Server running at https://songduan-api.com`);
+}).on("error", (error) => {
+    console.error("❌ Server error:", error);
 });
 
 // server.on("listening", onListening);
