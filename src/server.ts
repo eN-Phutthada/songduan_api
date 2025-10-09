@@ -2,21 +2,10 @@ import http from "http";
 import { app } from "./app";
 
 const server = http.createServer(app);
+const PORT = Number(process.env.PORT) || 3000
 
-server.listen(() => {
-    console.log(`🚀 Server running `);
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Server listening on ${PORT}`)
 }).on("error", (error) => {
     console.error("❌ Server error:", error);
 });
-
-// server.on("listening", onListening);
-
-// function onListening(): void {
-//     const addr = server.address();
-//     if (!addr) {
-//         console.warn("⚠️  Server address is null");
-//         return;
-//     }
-//     const bind = typeof addr === "string" ? `pipe ${addr}` : `port ${addr.port}`;
-//     console.log(`✅ Listening on ${bind}`);
-// }
