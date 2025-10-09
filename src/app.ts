@@ -12,20 +12,14 @@ export const app = express();
 app.use(express.json());
 app.use(express.text());
 
-app.get('/healthz', (_, res) => res.status(200).send('ok'));
+// --- health endpoints ---
+app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
-app.get('/', (_, res) => {
+app.get('/', (_req, res) => {
     const html = `
     <style>
-      body {
-        background: #0f0f0f;
-        color: #00ffcc;
-        font-family: monospace;
-        text-align: center;
-        padding-top: 20vh;
-      }
-      h1 { font-size: 3rem; margin-bottom: 0.5rem; }
-      p { color: #999; }
+      body { background:#0f0f0f;color:#00ffcc;font-family:monospace;text-align:center;padding-top:20vh; }
+      h1 { font-size:3rem;margin-bottom:.5rem; } p { color:#999; }
     </style>
     <h1>⚡ API online ⚡</h1>
     <p>Render instance is alive — version ${process.env.npm_package_version}</p>
@@ -33,41 +27,48 @@ app.get('/', (_, res) => {
     res.send(html);
 });
 
-app.get("/health", (_req, res) => {
-    res.json({ ok: true, service: "api", ts: new Date().toISOString() });
+app.get('/health', (_req, res) => {
+    res.json({ ok: true, service: 'api', ts: new Date().toISOString() });
 });
 
 app.get('/test-db', async (_req, res) => {
     try {
         const [rows] = await conn.query('SELECT NOW() as now');
-        res.json({
-            status: 'ok',
-            now: (rows as any)[0].now
-        });
+        res.json({ status: 'ok', now: (rows as any)[0].now });
     } catch (err) {
         console.error('[DB] connection error', err);
-        res.status(500).json({
-            status: 'error',
-            message: err instanceof Error ? err.message : String(err)
+        res.status(500).json({ status: 'error', message: err instanceof Error ? err.message : String(err) });
+    }
+});
+
+// --- routers ---
+app.use('/users', usersRouter);
+app.use('/riders', ridersRouter);
+app.use('/addresses', addressesRouter);
+app.use('/shipments', shipmentRouter);
+app.use('/rider_locations', rider_locations);
+app.use('/upload', uploadRouter);
+app.use('/uploads', express.static('uploads'));
+
+// --- ONE error handler at the very end ---
+app.use((err: any, _req: any, res: any, _next: any) => {
+    // case เฉพาะไฟล์อัปโหลด
+    if (err?.message === 'INVALID_FILE_TYPE') {
+        return res.status(400).json({
+            error: { message: 'ไฟล์รูปไม่รองรับ (รองรับ .jpg/.jpeg/.png/.webp/.gif/.heic/.heif)' }
         });
     }
+
+    // log รายละเอียดไว้ฝั่ง server
+    console.error('🔥 Unhandled error:', {
+        message: err?.message,
+        code: err?.code,
+        errno: err?.errno,
+        sqlState: err?.sqlState
+    });
+
+    // ตอบแบบปลอดภัยให้ client
+    return res.status(500).json({
+        error: { message: err?.message || 'internal error', code: err?.code }
+    });
 });
-
-// error handler กลาง app.ts
-app.use((err: any, _req: any, res: any, _next: any) => {
-    if (err?.message === "INVALID_FILE_TYPE") {
-        return res.status(400).json({ error: { message: "ไฟล์รูปไม่รองรับ (รองรับ .jpg/.jpeg/.png/.webp/.gif/.heic/.heif)" } });
-    }
-    return res.status(500).json({ error: { message: err?.message || "internal error" } });
-});
-
-
-app.use("/users", usersRouter);
-app.use("/riders", ridersRouter);
-app.use("/addresses", addressesRouter);
-app.use("/shipments", shipmentRouter);
-app.use("/rider_locations", rider_locations);
-
-app.use("/upload", uploadRouter);
-app.use("/uploads", express.static("uploads"));
-
