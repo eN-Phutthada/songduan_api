@@ -9,21 +9,21 @@ import { conn } from "./lib/db";
 
 export const app = express();
 
-app.use(express.json());
-app.use(express.text());
+app.use(express.json({ limit: '1mb' }));
+app.use(express.text({ limit: '256kb' }));
 
 // --- health endpoints ---
 app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
 app.get('/', (_req, res) => {
     const html = `
-    <style>
-      body { background:#0f0f0f;color:#00ffcc;font-family:monospace;text-align:center;padding-top:20vh; }
-      h1 { font-size:3rem;margin-bottom:.5rem; } p { color:#999; }
-    </style>
-    <h1>⚡ API online ⚡</h1>
-    <p>Render instance is alive — version ${process.env.npm_package_version}</p>
-  `;
+  <style>
+    body { background:#0f0f0f;color:#00ffcc;font-family:monospace;text-align:center;padding-top:20vh; }
+    h1 { font-size:3rem;margin-bottom:.5rem; } p { color:#999; }
+  </style>
+  <h1>⚡ API online ⚡</h1>
+  <p>Render instance is alive — version ${process.env.npm_package_version}</p>
+`;
     res.send(html);
 });
 
@@ -35,9 +35,11 @@ app.get('/test-db', async (_req, res) => {
     try {
         const [rows] = await conn.query('SELECT NOW() as now');
         res.json({ status: 'ok', now: (rows as any)[0].now });
-    } catch (err) {
-        console.error('[DB] connection error', err);
-        res.status(500).json({ status: 'error', message: err instanceof Error ? err.message : String(err) });
+    } catch (err: any) {
+        console.error('[DB] connection error', {
+            code: err?.code, errno: err?.errno, fatal: err?.fatal, message: err?.message
+        });
+        res.status(500).json({ status: 'error', message: err?.message, code: err?.code });
     }
 });
 
@@ -52,14 +54,12 @@ app.use('/uploads', express.static('uploads'));
 
 // --- ONE error handler at the very end ---
 app.use((err: any, _req: any, res: any, _next: any) => {
-    // case เฉพาะไฟล์อัปโหลด
     if (err?.message === 'INVALID_FILE_TYPE') {
         return res.status(400).json({
             error: { message: 'ไฟล์รูปไม่รองรับ (รองรับ .jpg/.jpeg/.png/.webp/.gif/.heic/.heif)' }
         });
     }
 
-    // log รายละเอียดไว้ฝั่ง server
     console.error('🔥 Unhandled error:', {
         message: err?.message,
         code: err?.code,
@@ -67,7 +67,6 @@ app.use((err: any, _req: any, res: any, _next: any) => {
         sqlState: err?.sqlState
     });
 
-    // ตอบแบบปลอดภัยให้ client
     return res.status(500).json({
         error: { message: err?.message || 'internal error', code: err?.code }
     });
