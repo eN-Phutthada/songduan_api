@@ -4,7 +4,6 @@ import { asyncHandler } from "../middleware/asyncHandler";
 import { ResultSetHeader, RowDataPacket } from "mysql2";
 import { uploadMedia, buildUploadTarget, saveBufferToFile, safeUnlink, ensureDir } from "../utils/upload";
 import path from "path";
-import fs from "fs";
 
 const router = Router();
 export default router;
@@ -12,11 +11,11 @@ export default router;
 router.get(
     "/",
     asyncHandler(async (req: Request, res: Response) => {
-        // รองรับทั้ง snake_case / camelCase
+        // รองรับทั้ง snake/camel
         const _sender = (req.query.sender_id ?? req.query.senderId) as string | undefined;
         const _receiver = (req.query.receiver_id ?? req.query.receiverId) as string | undefined;
         const _status = req.query.status as string | undefined;
-        const _available = req.query.available as string | undefined; // optional: งานว่าง (ยังไม่ถูก assign)
+        const _available = req.query.available as string | undefined; // งานว่าง (ยังไม่ถูก assign)
 
         const senderId = _sender !== undefined && !isNaN(Number(_sender)) ? Number(_sender) : undefined;
         const receiverId = _receiver !== undefined && !isNaN(Number(_receiver)) ? Number(_receiver) : undefined;
@@ -30,25 +29,14 @@ router.get(
         if (pageSize > 100) pageSize = 100;
         const offset = (page - 1) * pageSize;
 
-        // สร้าง where แค่ครั้งเดียว
         const where: string[] = [];
         const params: any[] = [];
 
-        if (senderId !== undefined) {
-            where.push("s.sender_id = ?");
-            params.push(senderId);
-        }
-        if (receiverId !== undefined) {
-            where.push("s.receiver_id = ?");
-            params.push(receiverId);
-        }
-        if (status) {
-            where.push("s.status = ?");
-            params.push(status);
-        }
+        if (senderId !== undefined) { where.push("s.sender_id = ?"); params.push(senderId); }
+        if (receiverId !== undefined) { where.push("s.receiver_id = ?"); params.push(receiverId); }
+        if (status) { where.push("s.status = ?"); params.push(status); }
         if (available) {
-            // งานที่ยังไม่มีไรเดอร์ active (ขึ้นกับโมเดลของคุณ)
-            // ถ้ามีตาราง rider_assignments.active_owner: null = ยังไม่ถูกถือ
+            // งานที่ยังไม่มีไรเดอร์ active
             where.push(`
         NOT EXISTS (
           SELECT 1 FROM rider_assignments ra
@@ -59,7 +47,7 @@ router.get(
 
         const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-        // นับทั้งหมด (ต้องใช้พารามฯเดียวกับ query หลัก)
+        // นับทั้งหมด (ใช้ params ชุดเดียวกัน)
         const [countRows] = await conn.query<RowDataPacket[]>(
             `SELECT COUNT(*) AS cnt
        FROM shipments s
@@ -68,7 +56,7 @@ router.get(
         );
         const total = Number(countRows[0]?.cnt ?? 0);
 
-        // ดึงรายการ
+        // รายการ + sender/receiver + pickup/dropoff + cover + rider (active)
         const [rows] = await conn.query<RowDataPacket[]>(
             `
       SELECT
@@ -77,29 +65,39 @@ router.get(
         s.status,
         s.created_at,
 
-        us.id            AS sender_id,
-        us.name          AS sender_name,
-        us.phone         AS sender_phone,
-        us.avatar_path   AS sender_avatar_path,
+        -- Sender
+        us.id           AS sender_id,
+        us.name         AS sender_name,
+        us.phone        AS sender_phone,
+        us.avatar_path  AS sender_avatar_path,
 
-        ur.id            AS receiver_id,
-        ur.name          AS receiver_name,
-        ur.phone         AS receiver_phone,
-        ur.avatar_path   AS receiver_avatar_path,
+        -- Receiver
+        ur.id           AS receiver_id,
+        ur.name         AS receiver_name,
+        ur.phone        AS receiver_phone,
+        ur.avatar_path  AS receiver_avatar_path,
 
-        ap.id            AS pickup_id,
-        ap.label         AS pickup_label,
-        ap.address_text  AS pickup_address_text,
-        ap.lat           AS pickup_lat,
-        ap.lng           AS pickup_lng,
+        -- Pickup
+        ap.id           AS pickup_id,
+        ap.label        AS pickup_label,
+        ap.address_text AS pickup_address_text,
+        ap.lat          AS pickup_lat,
+        ap.lng          AS pickup_lng,
 
-        ad.id            AS dropoff_id,
-        ad.label         AS dropoff_label,
-        ad.address_text  AS dropoff_address_text,
-        ad.lat           AS dropoff_lat,
-        ad.lng           AS dropoff_lng,
+        -- Dropoff
+        ad.id           AS dropoff_id,
+        ad.label        AS dropoff_label,
+        ad.address_text AS dropoff_address_text,
+        ad.lat          AS dropoff_lat,
+        ad.lng          AS dropoff_lng,
 
-        sf.file_path     AS cover_file_path
+        -- Cover proof (ตอนรอไรเดอร์)
+        sf.file_path    AS cover_file_path,
+
+        -- Active rider (ถ้ามี)
+        ra.rider_id     AS rider_id,
+        urider.name     AS rider_name,
+        urider.avatar_path AS rider_avatar_path
       FROM shipments s
       JOIN users     us ON us.id = s.sender_id
       JOIN users     ur ON ur.id = s.receiver_id
@@ -107,6 +105,10 @@ router.get(
       JOIN addresses ad ON ad.id = s.dropoff_address_id
       LEFT JOIN shipment_files sf
         ON sf.shipment_id = s.id AND sf.stage = 'WAITING_FOR_RIDER'
+      LEFT JOIN rider_assignments ra
+        ON ra.shipment_id = s.id AND ra.delivered_at IS NULL
+      LEFT JOIN users urider
+        ON urider.id = ra.rider_id
       ${whereSql}
       ORDER BY s.created_at DESC, s.id DESC
       LIMIT ? OFFSET ?
@@ -115,15 +117,11 @@ router.get(
         );
 
         const data = rows.map(r => {
-            let pickupLabel = r.pickup_label ?? '';
-            let dropoffLabel = r.dropoff_label ?? '';
+            let pickupLabel = (r.pickup_label ?? '').toString();
+            let dropoffLabel = (r.dropoff_label ?? '').toString();
 
-            if (pickupLabel.trim() === 'บ้าน') {
-                pickupLabel = `${r.sender_name}`;
-            }
-            if (dropoffLabel.trim() === 'บ้าน') {
-                dropoffLabel = `${r.receiver_name}`;
-            }
+            if (pickupLabel.trim() === 'บ้าน') pickupLabel = `${r.sender_name}`;
+            if (dropoffLabel.trim() === 'บ้าน') dropoffLabel = `${r.receiver_name}`;
 
             return {
                 id: r.id,
@@ -158,9 +156,18 @@ router.get(
                     lng: r.dropoff_lng,
                 },
                 cover_file_path: r.cover_file_path ?? null,
+
+                // ✅ ส่งข้อมูลไรเดอร์ไปให้หน้า Receiver ใช้แสดงชื่อ
+                assignment: r.rider_id ? {
+                    rider_id: r.rider_id,
+                    rider: {
+                        id: r.rider_id,
+                        name: r.rider_name,
+                        avatar_path: r.rider_avatar_path,
+                    }
+                } : null,
             };
         });
-
 
         return res.json({ data, page, pageSize, total });
     })
