@@ -395,191 +395,97 @@ router.post(
         }
     })
 );
-
 router.get(
-    "/:id/detail",
-    asyncHandler(async (req: Request, res: Response) => {
-        const _id = req.params.id;
-        if (!_id || isNaN(Number(_id))) {
-            return res.status(400).json({ error: { message: "shipment id ไม่ถูกต้อง" } });
+    "/:id",
+    asyncHandler(async (req, res) => {
+        const id = Number(req.params.id);
+        if (!Number.isFinite(id)) {
+            return res.status(400).json({ error: { message: "shipment_id ไม่ถูกต้อง" } });
         }
-        const shipmentId = Number(_id);
 
-        // รายการหลัก + joins
         const [rows] = await conn.query<RowDataPacket[]>(
             `
       SELECT
-        s.id, s.title, s.status, s.created_at, s.note,
+        s.id, s.title, s.status, s.created_at,
 
-        -- sender
-        us.id            AS sender_id,
-        us.name          AS sender_name,
-        us.phone         AS sender_phone,
-        us.avatar_path   AS sender_avatar_path,
+        -- sender / receiver
+        us.id  AS sender_id,   us.name  AS sender_name,   us.avatar_path AS sender_avatar_path,
+        ur.id  AS receiver_id, ur.name  AS receiver_name, ur.avatar_path AS receiver_avatar_path,
 
-        -- receiver
-        ur.id            AS receiver_id,
-        ur.name          AS receiver_name,
-        ur.phone         AS receiver_phone,
-        ur.avatar_path   AS receiver_avatar_path,
+        -- pickup / dropoff
+        ap.id  AS pickup_id,   ap.label AS pickup_label,   ap.address_text AS pickup_address_text,
+        ap.lat AS pickup_lat,  ap.lng   AS pickup_lng,
+        ad.id  AS dropoff_id,  ad.label AS dropoff_label,  ad.address_text AS dropoff_address_text,
+        ad.lat AS dropoff_lat, ad.lng   AS dropoff_lng,
 
-        -- pickup
-        ap.id            AS pickup_id,
-        ap.label         AS pickup_label,
-        ap.address_text  AS pickup_address_text,
-        ap.lat           AS pickup_lat,
-        ap.lng           AS pickup_lng,
-
-        -- dropoff
-        ad.id            AS dropoff_id,
-        ad.label         AS dropoff_label,
-        ad.address_text  AS dropoff_address_text,
-        ad.lat           AS dropoff_lat,
-        ad.lng           AS dropoff_lng,
-
-        -- photos
-        cov.file_path    AS cover_file_path,        -- (optional) รูปหน้าปกตอน WAITING_FOR_RIDER
-        pic.file_path    AS pickup_photo_path,      -- รูปตอนรับ (PICKED_UP_EN_ROUTE)
-        del.file_path    AS deliver_photo_path      -- รูปตอนส่ง (DELIVERED)
+        -- photos (nullable)
+        sf_pick.file_path  AS pickup_photo_path,
+        sf_deliv.file_path AS deliver_photo_path
 
       FROM shipments s
       JOIN users     us ON us.id = s.sender_id
       JOIN users     ur ON ur.id = s.receiver_id
       JOIN addresses ap ON ap.id = s.pickup_address_id
       JOIN addresses ad ON ad.id = s.dropoff_address_id
-      LEFT JOIN shipment_files cov ON cov.shipment_id = s.id AND cov.stage = 'WAITING_FOR_RIDER'
-      LEFT JOIN shipment_files pic ON pic.shipment_id = s.id AND pic.stage = 'PICKED_UP_EN_ROUTE'
-      LEFT JOIN shipment_files del ON del.shipment_id = s.id AND del.stage = 'DELIVERED'
+
+      -- รูปตอน "รับสินค้าไปแล้ว" (หลังจาก pickup)
+      LEFT JOIN shipment_files sf_pick
+        ON sf_pick.shipment_id = s.id AND sf_pick.stage = 'PICKED_UP_EN_ROUTE'
+
+      -- รูปตอน "ส่งสำเร็จ"
+      LEFT JOIN shipment_files sf_deliv
+        ON sf_deliv.shipment_id = s.id AND sf_deliv.stage = 'DELIVERED'
+
       WHERE s.id = ?
       LIMIT 1
       `,
-            [shipmentId]
+            [id]
         );
 
         if (rows.length === 0) {
-            return res.status(404).json({ error: { message: "ไม่พบ shipment นี้" } });
+            return res.status(404).json({ error: { message: "ไม่พบข้อมูลงานนี้" } });
         }
 
         const r = rows[0];
 
-        // รายการสินค้า
-        const [items] = await conn.query<RowDataPacket[]>(
-            `SELECT id, name, qty, note FROM shipment_items WHERE shipment_id = ? ORDER BY id ASC`,
-            [shipmentId]
-        );
+        return res.json({
+            data: {
+                id: r.id,
+                title: r.title,
+                status: r.status,
+                created_at: r.created_at,
 
-        // การ assign ไรเดอร์ (ถ้ามี)
-        const [assignRows] = await conn.query<RowDataPacket[]>(
-            `
-      SELECT
-        ra.shipment_id,
-        ra.rider_id,
-        ra.accepted_at, ra.picked_up_at, ra.delivered_at,
-        u.name AS rider_name, u.phone AS rider_phone, u.avatar_path AS rider_avatar_path
-      FROM rider_assignments ra
-      JOIN users u ON u.id = ra.rider_id
-      WHERE ra.shipment_id = ?
-      LIMIT 1
-      `,
-            [shipmentId]
-        );
+                sender: {
+                    id: r.sender_id,
+                    name: r.sender_name,
+                    avatar_path: r.sender_avatar_path,
+                },
+                receiver: {
+                    id: r.receiver_id,
+                    name: r.receiver_name,
+                    avatar_path: r.receiver_avatar_path,
+                },
 
-        // ตำแหน่งไรเดอร์ล่าสุด (ถ้ามี)
-        let riderLocation: any = null;
-        if (assignRows.length > 0) {
-            const [locRows] = await conn.query<RowDataPacket[]>(
-                `
-        SELECT rider_id, lat, lng, heading_deg, speed_mps, updated_at
-        FROM rider_locations
-        WHERE rider_id = ?
-        LIMIT 1
-        `,
-                [assignRows[0].rider_id]
-            );
-            riderLocation = locRows.length ? locRows[0] : null;
-        }
+                pickup: {
+                    id: r.pickup_id,
+                    label: r.pickup_label,
+                    address_text: r.pickup_address_text,
+                    lat: r.pickup_lat,
+                    lng: r.pickup_lng,
+                },
+                dropoff: {
+                    id: r.dropoff_id,
+                    label: r.dropoff_label,
+                    address_text: r.dropoff_address_text,
+                    lat: r.dropoff_lat,
+                    lng: r.dropoff_lng,
+                },
 
-        // label "บ้าน" → แทนด้วยชื่อเจ้าบ้าน (ปรับตามที่เคยคุย)
-        let pickupLabel = (r.pickup_label ?? '').toString();
-        let dropoffLabel = (r.dropoff_label ?? '').toString();
-        if (pickupLabel.trim() === 'บ้าน') pickupLabel = r.sender_name;
-        if (dropoffLabel.trim() === 'บ้าน') dropoffLabel = r.receiver_name;
-
-        // shape ข้อมูล
-        const data = {
-            id: r.id,
-            title: r.title,
-            status: r.status,
-            created_at: r.created_at,
-            note: r.note ?? null,
-
-            sender: {
-                id: r.sender_id,
-                name: r.sender_name,
-                phone: r.sender_phone,
-                avatar_path: r.sender_avatar_path,
-            },
-            receiver: {
-                id: r.receiver_id,
-                name: r.receiver_name,
-                phone: r.receiver_phone,
-                avatar_path: r.receiver_avatar_path,
-            },
-
-            pickup: {
-                id: r.pickup_id,
-                label: pickupLabel,
-                address_text: r.pickup_address_text,
-                lat: r.pickup_lat,
-                lng: r.pickup_lng,
-            },
-            dropoff: {
-                id: r.dropoff_id,
-                label: dropoffLabel,
-                address_text: r.dropoff_address_text,
-                lat: r.dropoff_lat,
-                lng: r.dropoff_lng,
-            },
-
-            photos: {
-                cover_file_path: r.cover_file_path ?? null,
+                // รูปจริงจาก DB (ถ้าไม่มีจะเป็น null)
                 pickup_photo_path: r.pickup_photo_path ?? null,
                 deliver_photo_path: r.deliver_photo_path ?? null,
             },
-
-            items: (items as RowDataPacket[]).map(it => ({
-                id: it.id,
-                name: it.name,
-                qty: it.qty,
-                note: it.note ?? null,
-            })),
-
-            assignment: assignRows.length
-                ? {
-                    rider: {
-                        id: assignRows[0].rider_id,
-                        name: assignRows[0].rider_name,
-                        phone: assignRows[0].rider_phone,
-                        avatar_path: assignRows[0].rider_avatar_path,
-                    },
-                    accepted_at: assignRows[0].accepted_at,
-                    picked_up_at: assignRows[0].picked_up_at,
-                    delivered_at: assignRows[0].delivered_at,
-                }
-                : null,
-
-            rider_location: riderLocation
-                ? {
-                    lat: riderLocation.lat,
-                    lng: riderLocation.lng,
-                    heading_deg: riderLocation.heading_deg,
-                    speed_mps: riderLocation.speed_mps,
-                    updated_at: riderLocation.updated_at,
-                }
-                : null,
-        };
-
-        return res.json({ data });
+        });
     })
 );
 
